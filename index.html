@@ -420,6 +420,52 @@ main {
 .t-car      { color: var(--car); }
 .t-airplane { color: var(--airplane); }
 
+/* ── Paste Zone ──────────────────────────────────────────────── */
+#paste-zone {
+  border: 1.5px dashed var(--border2);
+  border-radius: 4px;
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.15s;
+  margin-bottom: 1.5rem;
+  position: relative;
+  outline: none;
+}
+#paste-zone:hover,
+#paste-zone:focus,
+#paste-zone.flash {
+  border-color: var(--accent);
+  background: rgba(200,245,90,0.03);
+}
+#paste-zone.flash { animation: pasteFlash 0.35s ease; }
+@keyframes pasteFlash {
+  0%   { background: rgba(200,245,90,0.12); }
+  100% { background: rgba(200,245,90,0.03); }
+}
+.paste-icon {
+  width: 32px; height: 32px; flex-shrink: 0;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+}
+.paste-icon svg { width: 15px; height: 15px; stroke: var(--accent); fill: none; stroke-width: 1.8; }
+.paste-text { flex: 1; }
+.paste-title { font-size: 13px; color: var(--text); margin-bottom: 2px; }
+.paste-sub   { font-size: 11px; color: var(--muted); }
+.paste-kbd {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  color: var(--accent);
+  background: var(--surface2);
+  flex-shrink: 0;
+}
+
 /* ── Responsive ──────────────────────────────────────────────── */
 @media (max-width: 860px) {
   main { grid-template-columns: 1fr; }
@@ -433,12 +479,12 @@ main {
 
 <header>
   <div>
-    <div class="logo">HOG<span>+</span>SVM</div>
-    <div class="logo-sub">Image Classification System</div>
+    <div class="logo">Efficient<span>Net</span></div>
+    <div class="logo-sub">Image Classification — B3</div>
   </div>
   <div class="header-meta">
-    <div><span class="pill">scikit-learn</span> &nbsp;<span class="pill">OpenCV</span></div>
-    <div style="margin-top:6px;">cat · dog · car · airplane</div>
+    <div><span class="pill">EfficientNet-B3</span> &nbsp;<span class="pill">ONNX</span></div>
+    <div style="margin-top:6px;">1000 classes · 81% accuracy · top-5</div>
   </div>
 </header>
 
@@ -453,6 +499,17 @@ main {
       </div>
       <div class="dz-title">Drop images here</div>
       <div class="dz-sub">or click to browse &nbsp;·&nbsp; <em>JPG, PNG, WebP, GIF</em><br>Multiple files supported</div>
+    </div>
+
+    <div id="paste-zone" tabindex="0" title="Click here then press Ctrl+V / Cmd+V">
+      <div class="paste-icon">
+        <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2h-3"/><path d="M9 12h6M9 16h4"/></svg>
+      </div>
+      <div class="paste-text">
+        <div class="paste-title">Paste an image</div>
+        <div class="paste-sub">Click here, then press Ctrl+V &nbsp;·&nbsp; or paste anywhere on the page</div>
+      </div>
+      <span class="paste-kbd">Ctrl+V</span>
     </div>
 
     <div class="section-label">Queue</div>
@@ -497,7 +554,13 @@ const placeholder   = document.getElementById('placeholder');
 const resultsList   = document.getElementById('results-list');
 const summaryBox    = document.getElementById('summary-box');
 
-const CLASS_COLORS = { cat: 'cat', dog: 'dog', car: 'car', airplane: 'airplane' };
+// accent colours cycling for arbitrary labels
+const ACCENT_PALETTE = ['#5af5c8','#f5c85a','#5a8ff5','#f55ac8','#f55a5a','#c8f55a','#5af5f5','#f5905a'];
+const labelColor = (() => {
+  const map = {};
+  let idx = 0;
+  return label => { if (!map[label]) map[label] = ACCENT_PALETTE[idx++ % ACCENT_PALETTE.length]; return map[label]; };
+})();
 
 let images = [];   // { id, file, dataUrl, result }
 let nextId = 0;
@@ -512,6 +575,38 @@ dropZone.addEventListener('drop', e => {
   dropZone.classList.remove('drag-over');
   addFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')));
 });
+
+// ── Paste support ───────────────────────────────────────────────
+function handlePasteEvent(e) {
+  const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
+  if (!items) return;
+  const imageItems = [...items].filter(i => i.type.startsWith('image/'));
+  if (imageItems.length === 0) return;
+  e.preventDefault();
+  const pasteZone = document.getElementById('paste-zone');
+  pasteZone.classList.add('flash');
+  setTimeout(() => pasteZone.classList.remove('flash'), 400);
+  imageItems.forEach(item => {
+    const file = item.getAsFile();
+    if (file) addDataUrlFromBlob(file, `pasted-image-${nextId}.png`);
+  });
+}
+
+function addDataUrlFromBlob(blob, name) {
+  const id = nextId++;
+  const reader = new FileReader();
+  reader.onload = e => {
+    images.push({ id, file: { name }, dataUrl: e.target.result, result: null });
+    renderGrid();
+  };
+  reader.readAsDataURL(blob);
+}
+
+// Global paste listener (works anywhere on the page)
+document.addEventListener('paste', handlePasteEvent);
+
+// Also handle paste when paste-zone is focused
+document.getElementById('paste-zone').addEventListener('paste', handlePasteEvent);
 
 function addFiles(files) {
   files.forEach(file => {
@@ -544,7 +639,7 @@ function renderGrid() {
     card.onclick = () => scrollToResult(img.id);
 
     const badgeHtml = img.result
-      ? `<div class="badge c-${img.result.label}">${img.result.label}</div>`
+      ? `<div class="badge" style="background:${labelColor(img.result.label)};color:#0d0d0d">${img.result.label}</div>`
       : '';
     const spinnerHtml = img.loading
       ? `<div class="spinner-overlay"><div class="spin"></div></div>`
@@ -597,7 +692,7 @@ async function classifyAll() {
       if (data.error) throw new Error(data.error);
       img.result = data;
     } catch (err) {
-      img.result = { label: 'error', confidence: 0, scores: {}, error: err.message };
+      img.result = { label: 'error', confidence: 0, results: [], error: err.message };
     }
 
     img.loading = false;
@@ -613,7 +708,6 @@ async function classifyAll() {
 function appendResult(img) {
   if (!img.result) return;
   const r = img.result;
-  const color = CLASS_COLORS[r.label] || 'muted';
 
   const card = document.createElement('div');
   card.className = 'result-card';
@@ -632,18 +726,27 @@ function appendResult(img) {
       </div>
       <div class="result-body" style="font-size:11px;color:var(--danger)">${r.error}</div>`;
   } else {
-    const scoresHtml = Object.entries(r.scores)
-      .sort((a, b) => b[1] - a[1])
-      .map(([cls, pct]) => `
+    const topPct  = r.results[0].confidence;
+    const color   = labelColor(r.label);
+    const scoresHtml = r.results.map(item => {
+      const isTop = item.label === r.label;
+      const fill  = labelColor(item.label);
+      const groupTag = item.group ? `<span style="font-size:9px;padding:1px 5px;border-radius:2px;background:${fill}22;color:${fill};margin-left:5px;">${item.group}</span>` : '';
+      return `
         <div class="score-row">
-          <div class="score-cls">${cls}</div>
-          <div class="score-track">
-            <div class="score-fill f-${cls}" style="width:0%" data-w="${pct}%"></div>
+          <div class="score-cls" title="${item.label}" style="width:auto;max-width:160px;flex:1;">${item.label.length > 22 ? item.label.slice(0,21)+'…' : item.label}${groupTag}</div>
+          <div class="score-track" style="max-width:80px;">
+            <div class="score-fill" style="width:0%;background:${fill}" data-w="${(item.confidence/Math.max(topPct,1)*100).toFixed(1)}%"></div>
           </div>
-          <div class="score-pct t-${cls === r.label ? cls : ''}" style="${cls === r.label ? '' : 'color:var(--muted)'}">
-            ${pct}%
+          <div class="score-pct" style="color:${isTop ? fill : 'var(--muted)'}">
+            ${item.confidence.toFixed(1)}%
           </div>
-        </div>`).join('');
+        </div>`;
+    }).join('');
+
+    const groupBadge = r.group
+      ? `<span style="font-size:10px;padding:1px 7px;border-radius:2px;background:${color}22;color:${color};border:1px solid ${color}44;">${r.group}</span>`
+      : '';
 
     card.innerHTML = `
       <div class="result-header" onclick="highlightCard(${img.id})">
@@ -651,8 +754,9 @@ function appendResult(img) {
         <div class="result-info">
           <div class="result-fname">${img.file.name}</div>
           <div class="result-label-row">
-            <span class="result-class">${r.label}</span>
-            <span class="result-conf">${r.confidence}%</span>
+            <span class="result-class" style="color:${color}">${r.label}</span>
+            <span class="result-conf">${r.confidence.toFixed(1)}%</span>
+            ${groupBadge}
           </div>
         </div>
       </div>
@@ -681,7 +785,8 @@ function renderSummary() {
 
   const counts = {};
   classified.forEach(i => {
-    counts[i.result.label] = (counts[i.result.label] || 0) + 1;
+    const key = i.result.group || i.result.label;
+    counts[key] = (counts[key] || 0) + 1;
   });
   const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
   const avgConf = Math.round(classified.reduce((s, i) => s + i.result.confidence, 0) / classified.length);

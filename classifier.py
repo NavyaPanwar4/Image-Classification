@@ -1,14 +1,18 @@
 """
-Image Classifier using HOG Features + SVM (scikit-learn + OpenCV)
-------------------------------------------------------------------
-Uses a Support Vector Machine trained on HOG (Histogram of Oriented
-Gradients) features extracted from images. Supports 4 categories:
-cats, dogs, cars, and planes — using bundled synthetic demo weights.
+Image Classifier — EfficientNet-B3 via torchvision
+----------------------------------------------------
+Uses torchvision's EfficientNet-B3 with official pretrained weights.
+Falls back to MobileNetV2 if EfficientNet is unavailable.
+
+This approach is reliable because torchvision manages the model weights
+and preprocessing correctly — no manual ONNX shape guessing.
+
+Requirements:
+    pip install torch torchvision opencv-python numpy
 
 Usage:
     python classifier.py --image path/to/image.jpg
-    python classifier.py --demo          # runs on all sample images
-    python classifier.py --train         # retrains the model
+    python classifier.py --image photo.jpg --topk 10
 """
 
 import os
@@ -16,234 +20,238 @@ import sys
 import argparse
 import numpy as np
 import cv2
-from sklearn.svm import SVC
-from sklearn.preprocessing import StandardScaler
-from sklearn.pipeline import Pipeline
-from sklearn.metrics import classification_report, accuracy_score
-import joblib
 
-# ── Config ────────────────────────────────────────────────────────────────────
-
-IMG_SIZE      = (128, 128)   # resize all images to this before feature extraction
-MODEL_PATH    = "model.pkl"  # saved pipeline (scaler + SVM)
-CLASSES       = ["cat", "dog", "car", "airplane"]
-
-HOG_PARAMS = dict(
-    winSize        = (128, 128),
-    blockSize      = (16, 16),
-    blockStride    = (8, 8),
-    cellSize       = (8, 8),
-    nbins          = 9,
+LABELS_PATH = "imagenet_labels.txt"
+LABELS_URL  = (
+    "https://raw.githubusercontent.com/pytorch/hub/master/imagenet_classes.txt"
 )
 
-# ── Feature Extraction ────────────────────────────────────────────────────────
+# ── Label grouping ────────────────────────────────────────────────────────────
 
-def extract_hog(image_bgr: np.ndarray) -> np.ndarray:
+LABEL_GROUPS = {
+    "vehicle": [
+        "car", "truck", "bus", "van", "jeep", "cab", "taxi", "ambulance",
+        "fire engine", "minivan", "sports car", "convertible", "racer",
+        "limousine", "pickup", "tow truck", "garbage truck", "snowplow",
+        "motorcycle", "moped", "bicycle", "tricycle", "scooter", "go-kart",
+    ],
+    "animal": [
+        "dog", "cat", "bird", "fish", "snake", "lizard", "frog", "turtle",
+        "bear", "elephant", "lion", "tiger", "cheetah", "leopard", "horse",
+        "zebra", "giraffe", "camel", "deer", "rabbit", "hamster", "squirrel",
+        "fox", "wolf", "raccoon", "panda", "koala", "kangaroo", "monkey",
+        "gorilla", "parrot", "flamingo", "penguin", "eagle", "owl", "duck",
+        "goldfish", "shark", "whale", "dolphin", "lobster", "crab",
+        "butterfly", "bee", "spider", "ant",
+    ],
+    "food": [
+        "pizza", "burger", "sandwich", "hot dog", "taco", "sushi", "noodle",
+        "soup", "salad", "steak", "bread", "bagel", "pretzel", "croissant",
+        "waffle", "pancake", "ice cream", "cake", "cupcake", "cookie",
+        "donut", "apple", "banana", "orange", "strawberry", "grape",
+        "watermelon", "pineapple", "mango", "broccoli", "carrot", "mushroom",
+        "potato", "egg", "cheese", "coffee", "wine", "beer",
+    ],
+    "flower": [
+        "rose", "daisy", "tulip", "sunflower", "orchid", "lily", "lotus",
+        "poppy", "lavender", "hibiscus", "daffodil", "flower", "blossom",
+        "bouquet", "petal",
+    ],
+    "plant": [
+        "tree", "bush", "cactus", "fern", "grass", "moss", "vine",
+        "bamboo", "palm", "pine", "oak", "maple", "plant", "leaf",
+        "garden", "forest",
+    ],
+    "furniture": [
+        "chair", "sofa", "couch", "table", "desk", "bed", "wardrobe",
+        "cabinet", "shelf", "lamp", "mirror", "clock", "refrigerator",
+        "microwave", "oven", "toaster", "sink", "bathtub", "toilet",
+    ],
+    "electronics": [
+        "laptop", "computer", "keyboard", "mouse", "monitor", "television",
+        "phone", "mobile", "camera", "headphones", "speaker", "remote",
+        "printer", "projector", "tablet",
+    ],
+    "clothing": [
+        "shirt", "jacket", "coat", "dress", "jeans", "shoe", "boot",
+        "sneaker", "hat", "cap", "helmet", "glove", "scarf", "tie",
+    ],
+    "nature": [
+        "mountain", "valley", "beach", "lake", "river", "waterfall",
+        "desert", "field", "rock", "cloud", "sky", "sunset", "snow", "ice",
+    ],
+    "sports": [
+        "basketball", "soccer", "football", "tennis", "golf", "baseball",
+        "volleyball", "skateboard", "surfboard", "snowboard", "ski",
+        "racket", "bat", "bicycle",
+    ],
+}
+
+_KW_TO_GROUP = {}
+for _g, _kws in LABEL_GROUPS.items():
+    for _kw in _kws:
+        _KW_TO_GROUP[_kw.lower()] = _g
+
+
+def get_group(label: str):
+    ll = label.lower()
+    if ll in _KW_TO_GROUP:
+        return _KW_TO_GROUP[ll]
+    for kw, grp in _KW_TO_GROUP.items():
+        if kw in ll:
+            return grp
+    return None
+
+
+# ── Labels ────────────────────────────────────────────────────────────────────
+
+def _download(url, dest, label):
+    import urllib.request
+    print(f"[↓] Downloading {label} ...", end=" ", flush=True)
+    try:
+        urllib.request.urlretrieve(url, dest)
+        print(f"done ({os.path.getsize(dest)/1024:.0f} KB)")
+    except Exception as e:
+        if os.path.exists(dest):
+            os.remove(dest)
+        raise RuntimeError(f"Download failed: {e}")
+
+
+def load_labels():
+    if not os.path.exists(LABELS_PATH):
+        _download(LABELS_URL, LABELS_PATH, "ImageNet class labels")
+    with open(LABELS_PATH) as f:
+        return [line.strip() for line in f]
+
+
+# ── Model loading ─────────────────────────────────────────────────────────────
+
+def load_model():
     """
-    Resize image and extract HOG (Histogram of Oriented Gradients) features.
-    HOG captures edge/texture patterns that are robust to lighting changes.
-    Returns a 1-D float32 feature vector.
+    Load EfficientNet-B3 with pretrained ImageNet weights via torchvision.
+    Falls back to MobileNetV2 if EfficientNet is unavailable.
+    Weights are cached by torchvision in ~/.cache/torch/hub/checkpoints/
+    and downloaded automatically on first run.
     """
-    img = cv2.resize(image_bgr, IMG_SIZE)
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    try:
+        import torch
+        import torchvision.models as models
+        from torchvision.models import EfficientNet_B3_Weights
 
-    hog = cv2.HOGDescriptor(
-        HOG_PARAMS["winSize"],
-        HOG_PARAMS["blockSize"],
-        HOG_PARAMS["blockStride"],
-        HOG_PARAMS["cellSize"],
-        HOG_PARAMS["nbins"],
-    )
-    features = hog.compute(gray)          # shape: (N, 1)
-    return features.flatten().astype(np.float32)
+        print("[*] Loading EfficientNet-B3 (downloading weights on first run ~48 MB) ...")
+        weights = EfficientNet_B3_Weights.IMAGENET1K_V1
+        model   = models.efficientnet_b3(weights=weights)
+        model.eval()
+        transform = weights.transforms()
+        print("[✓] EfficientNet-B3 ready")
+        return model, transform, "EfficientNet-B3"
+
+    except Exception as e:
+        print(f"[!] EfficientNet-B3 unavailable ({e}), falling back to MobileNetV2 ...")
+        import torch
+        import torchvision.models as models
+        from torchvision.models import MobileNet_V2_Weights
+
+        weights   = MobileNet_V2_Weights.IMAGENET1K_V1
+        model     = models.mobilenet_v2(weights=weights)
+        model.eval()
+        transform = weights.transforms()
+        print("[✓] MobileNetV2 ready")
+        return model, transform, "MobileNetV2"
 
 
-def load_image(path: str) -> np.ndarray:
-    """Load an image from disk; raise FileNotFoundError if missing."""
+# ── Preprocessing ─────────────────────────────────────────────────────────────
+
+def preprocess(image_bgr, transform):
+    """
+    Convert OpenCV BGR image to the tensor format expected by the model.
+    torchvision's weights.transforms() handles resize, crop, normalisation.
+    """
+    from PIL import Image
+    import torch
+
+    rgb = cv2.cvtColor(image_bgr, cv2.COLOR_BGR2RGB)
+    pil = Image.fromarray(rgb)
+    return transform(pil).unsqueeze(0)   # (1, 3, H, W)
+
+
+# ── Inference ─────────────────────────────────────────────────────────────────
+
+def predict(model, transform, labels, image_bgr, topk=5):
+    """
+    Classify a BGR image.
+    Returns list of dicts: {label, confidence, group}
+    """
+    import torch
+
+    tensor = preprocess(image_bgr, transform)
+    with torch.no_grad():
+        logits = model(tensor)[0]
+        probs  = torch.softmax(logits, dim=0)
+
+    top_probs, top_idx = probs.topk(topk)
+
+    results = []
+    for prob, idx in zip(top_probs.tolist(), top_idx.tolist()):
+        lbl = labels[idx]
+        results.append({
+            "label":      lbl,
+            "confidence": round(prob * 100, 2),
+            "group":      get_group(lbl),
+        })
+    return results
+
+
+# ── Image loading ─────────────────────────────────────────────────────────────
+
+def load_image(path):
     if not os.path.exists(path):
         raise FileNotFoundError(f"Image not found: {path}")
     img = cv2.imread(path)
     if img is None:
-        raise ValueError(f"OpenCV could not read: {path}  (unsupported format?)")
+        raise ValueError(f"OpenCV could not read: {path}")
     return img
 
-# ── Model: build / train / save / load ───────────────────────────────────────
 
-def build_pipeline() -> Pipeline:
-    """
-    sklearn Pipeline:
-      1. StandardScaler  – zero-mean, unit-variance normalisation
-      2. SVC             – RBF-kernel Support Vector Classifier
-    """
-    return Pipeline([
-        ("scaler", StandardScaler()),
-        ("svm",    SVC(kernel="rbf", C=10, gamma="scale",
-                       probability=True, random_state=42)),
-    ])
+# ── CLI display ───────────────────────────────────────────────────────────────
 
-
-def train(X: np.ndarray, y: np.ndarray) -> Pipeline:
-    """Fit the pipeline on feature matrix X and integer labels y."""
-    pipeline = build_pipeline()
-    pipeline.fit(X, y)
-    return pipeline
-
-
-def save_model(pipeline: Pipeline, path: str = MODEL_PATH) -> None:
-    joblib.dump(pipeline, path)
-    print(f"[✓] Model saved → {path}")
-
-
-def load_model(path: str = MODEL_PATH) -> Pipeline:
-    if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"No saved model found at '{path}'.\n"
-            "Run:  python classifier.py --train"
-        )
-    return joblib.load(path)
-
-# ── Synthetic demo dataset ────────────────────────────────────────────────────
-
-def _synthetic_features_for_class(label_idx: int, n: int, rng) -> np.ndarray:
-    """
-    Generate plausible HOG-like feature vectors per class by adding
-    class-specific biases to random noise.  Used only when no real
-    image dataset is present so the demo can run out of the box.
-    """
-    hog_dim = 3780          # HOG descriptor length for 128x128 / 8x8 cells
-    bias = np.zeros(hog_dim, dtype=np.float32)
-
-    # Rough class fingerprints: different frequency bands dominate
-    step = hog_dim // len(CLASSES)
-    bias[label_idx * step : (label_idx + 1) * step] = 1.5
-
-    noise = rng.standard_normal((n, hog_dim)).astype(np.float32) * 0.4
-    return noise + bias
-
-
-def make_synthetic_dataset(n_per_class: int = 80):
-    """Return (X, y) arrays built from synthetic feature vectors."""
-    rng = np.random.default_rng(0)
-    X_parts, y_parts = [], []
-    for i in range(len(CLASSES)):
-        feats = _synthetic_features_for_class(i, n_per_class, rng)
-        X_parts.append(feats)
-        y_parts.append(np.full(n_per_class, i, dtype=np.int32))
-    X = np.vstack(X_parts)
-    y = np.concatenate(y_parts)
-    # shuffle
-    idx = rng.permutation(len(y))
-    return X[idx], y[idx]
-
-# ── Prediction ────────────────────────────────────────────────────────────────
-
-def predict(pipeline: Pipeline, image_bgr: np.ndarray):
-    """
-    Classify a single BGR image.
-    Returns (label_str, confidence_dict).
-    """
-    feat = extract_hog(image_bgr).reshape(1, -1)
-    label_idx   = pipeline.predict(feat)[0]
-    proba       = pipeline.predict_proba(feat)[0]
-    label       = CLASSES[label_idx]
-    confidence  = {CLASSES[i]: float(round(proba[i], 4)) for i in range(len(CLASSES))}
-    return label, confidence
-
-
-def print_result(path: str, label: str, confidence: dict) -> None:
-    bar_len = 30
-    print(f"\n{'─'*50}")
-    print(f"  Image : {path}")
-    print(f"  Result: {label.upper()}  ({confidence[label]*100:.1f}% confidence)")
-    print(f"{'─'*50}")
-    print("  Class probabilities:")
-    for cls, prob in sorted(confidence.items(), key=lambda x: -x[1]):
-        filled = int(prob * bar_len)
-        bar = "█" * filled + "░" * (bar_len - filled)
-        marker = " ◀" if cls == label else ""
-        print(f"    {cls:>8s}  {bar}  {prob*100:5.1f}%{marker}")
+def print_results(path, results, model_name=""):
+    top = results[0]
+    bar_len = 26
+    grp_tag = f"  [{top['group']}]" if top['group'] else ""
+    print(f"\n{'─'*56}")
+    print(f"  Model  : {model_name}")
+    print(f"  Image  : {path}")
+    print(f"  Result : {top['label']}{grp_tag}")
+    print(f"  Conf.  : {top['confidence']:.1f}%")
+    print(f"{'─'*56}")
+    top_prob = results[0]["confidence"]
+    for r in results:
+        filled = int((r["confidence"] / max(top_prob, 1)) * bar_len)
+        bar    = "█" * filled + "░" * (bar_len - filled)
+        grp    = f" [{r['group']}]" if r["group"] else ""
+        mark   = " ◀" if r == top else ""
+        lbl    = r["label"][:28]
+        print(f"  {lbl:28s}  {bar}  {r['confidence']:5.1f}%{grp}{mark}")
     print()
+
 
 # ── CLI ───────────────────────────────────────────────────────────────────────
 
-def cmd_train():
-    """Train on synthetic data and save the model."""
-    print("[*] Generating synthetic training dataset …")
-    X, y = make_synthetic_dataset(n_per_class=100)
-
-    split = int(0.8 * len(y))
-    X_train, X_test = X[:split], X[split:]
-    y_train, y_test = y[:split], y[split:]
-
-    print(f"[*] Training SVM on {len(X_train)} samples …")
-    pipeline = train(X_train, y_train)
-
-    y_pred = pipeline.predict(X_test)
-    acc = accuracy_score(y_test, y_pred)
-    print(f"\n[✓] Test accuracy: {acc*100:.1f}%\n")
-    print(classification_report(y_test, y_pred, target_names=CLASSES))
-
-    save_model(pipeline)
-
-
-def cmd_classify(image_path: str):
-    """Load model and classify a single image."""
-    print(f"[*] Loading model from '{MODEL_PATH}' …")
-    pipeline = load_model()
-
-    print(f"[*] Reading image: {image_path}")
-    img = load_image(image_path)
-
-    label, confidence = predict(pipeline, img)
-    print_result(image_path, label, confidence)
-
-
-def cmd_demo():
-    """
-    Run classification on synthetic test vectors (no real images needed).
-    Generates one test sample per class and prints predicted vs actual.
-    """
-    print("[*] Loading model …")
-    try:
-        pipeline = load_model()
-    except FileNotFoundError:
-        print("[!] No model found — training first …\n")
-        cmd_train()
-        pipeline = load_model()
-
-    print("\n[*] Running demo on synthetic test samples …\n")
-    rng = np.random.default_rng(99)
-    correct = 0
-    for i, cls in enumerate(CLASSES):
-        feat = _synthetic_features_for_class(i, 1, rng)
-        label_idx  = pipeline.predict(feat)[0]
-        proba      = pipeline.predict_proba(feat)[0]
-        predicted  = CLASSES[label_idx]
-        conf       = proba[label_idx] * 100
-        ok = "✓" if predicted == cls else "✗"
-        print(f"  [{ok}]  Actual: {cls:>8s}  →  Predicted: {predicted:>8s}  ({conf:.1f}%)")
-        if predicted == cls:
-            correct += 1
-
-    print(f"\n  Demo accuracy: {correct}/{len(CLASSES)}\n")
-
-
 def main():
     parser = argparse.ArgumentParser(
-        description="Image Classifier — HOG + SVM (scikit-learn + OpenCV)"
+        description="Image Classifier — EfficientNet-B3 (torchvision)"
     )
-    group = parser.add_mutually_exclusive_group(required=True)
-    group.add_argument("--image",  metavar="PATH", help="Classify a single image file")
-    group.add_argument("--train",  action="store_true", help="Train and save the model")
-    group.add_argument("--demo",   action="store_true", help="Run demo on synthetic samples")
+    parser.add_argument("--image", required=True, help="Path to image file")
+    parser.add_argument("--topk",  type=int, default=5,
+                        help="Top-k predictions to show (default: 5)")
     args = parser.parse_args()
 
-    if args.train:
-        cmd_train()
-    elif args.demo:
-        cmd_demo()
-    elif args.image:
-        cmd_classify(args.image)
+    labels              = load_labels()
+    model, transform, name = load_model()
+    img                 = load_image(args.image)
+    results             = predict(model, transform, labels, img, topk=args.topk)
+    print_results(args.image, results, model_name=name)
 
 
 if __name__ == "__main__":
