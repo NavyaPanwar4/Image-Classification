@@ -1,0 +1,817 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Image Classifier</title>
+<link href="https://fonts.googleapis.com/css2?family=Syne:wght@400;700;800&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+/* ── Reset & Base ─────────────────────────────────────────── */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+:root {
+  --bg:        #0d0d0d;
+  --surface:   #161616;
+  --surface2:  #1f1f1f;
+  --border:    #2a2a2a;
+  --border2:   #3a3a3a;
+  --text:      #f0ede8;
+  --muted:     #7a7774;
+  --accent:    #c8f55a;
+  --accent-d:  #8ab53a;
+  --danger:    #f55a5a;
+  --cat:       #5af5c8;
+  --dog:       #f5c85a;
+  --car:       #5a8ff5;
+  --airplane:  #f55ac8;
+}
+
+html { scroll-behavior: smooth; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: 'IBM Plex Mono', monospace;
+  min-height: 100vh;
+  overflow-x: hidden;
+}
+
+/* ── Header ────────────────────────────────────────────────── */
+header {
+  padding: 2.5rem 3rem 1.5rem;
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 1rem;
+}
+
+.logo {
+  font-family: 'Syne', sans-serif;
+  font-weight: 800;
+  font-size: clamp(1.6rem, 4vw, 2.4rem);
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.logo span { color: var(--accent); }
+
+.logo-sub {
+  font-size: 11px;
+  color: var(--muted);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  margin-top: 6px;
+}
+
+.header-meta {
+  font-size: 11px;
+  color: var(--muted);
+  text-align: right;
+  line-height: 1.8;
+}
+.pill {
+  display: inline-block;
+  padding: 2px 10px;
+  border: 1px solid var(--border2);
+  border-radius: 20px;
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--accent);
+  border-color: var(--accent-d);
+}
+
+/* ── Layout ─────────────────────────────────────────────────── */
+main {
+  display: grid;
+  grid-template-columns: 1fr 380px;
+  gap: 0;
+  min-height: calc(100vh - 100px);
+}
+
+/* ── Left Panel ─────────────────────────────────────────────── */
+.left-panel {
+  padding: 2.5rem 3rem;
+  border-right: 1px solid var(--border);
+}
+
+/* ── Drop Zone ──────────────────────────────────────────────── */
+#drop-zone {
+  border: 1.5px dashed var(--border2);
+  border-radius: 4px;
+  padding: 3.5rem 2rem;
+  text-align: center;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.15s;
+  position: relative;
+  margin-bottom: 2rem;
+}
+#drop-zone:hover,
+#drop-zone.drag-over {
+  border-color: var(--accent);
+  background: rgba(200, 245, 90, 0.03);
+}
+#drop-zone input[type=file] { display: none; }
+
+.dz-icon {
+  width: 52px; height: 52px;
+  margin: 0 auto 1.2rem;
+  border: 1px solid var(--border2);
+  border-radius: 4px;
+  display: flex; align-items: center; justify-content: center;
+}
+.dz-icon svg { width: 24px; height: 24px; stroke: var(--accent); fill: none; stroke-width: 1.5; }
+
+.dz-title {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 1rem;
+  margin-bottom: 6px;
+  color: var(--text);
+}
+.dz-sub {
+  font-size: 11px;
+  color: var(--muted);
+  line-height: 1.7;
+}
+.dz-sub em {
+  color: var(--accent);
+  font-style: normal;
+}
+
+/* ── Image Grid ─────────────────────────────────────────────── */
+.section-label {
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--muted);
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+.section-label::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: var(--border);
+}
+
+#image-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+  gap: 10px;
+  margin-bottom: 1.5rem;
+}
+
+.img-card {
+  position: relative;
+  aspect-ratio: 1;
+  border-radius: 4px;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  cursor: pointer;
+  transition: border-color 0.15s;
+  animation: fadeUp 0.25s ease both;
+}
+@keyframes fadeUp {
+  from { opacity: 0; transform: translateY(8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.img-card:hover { border-color: var(--border2); }
+.img-card.active { border-color: var(--accent); }
+
+.img-card img {
+  width: 100%; height: 100%;
+  object-fit: cover;
+  display: block;
+  transition: opacity 0.2s;
+}
+
+.img-card .badge {
+  position: absolute;
+  bottom: 6px; left: 6px;
+  padding: 2px 8px;
+  border-radius: 2px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  backdrop-filter: blur(4px);
+}
+.img-card .remove-btn {
+  position: absolute;
+  top: 5px; right: 5px;
+  width: 20px; height: 20px;
+  background: rgba(13,13,13,0.85);
+  border: 1px solid var(--border2);
+  border-radius: 2px;
+  color: var(--muted);
+  font-size: 12px;
+  display: flex; align-items: center; justify-content: center;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 0.15s, color 0.15s;
+}
+.img-card:hover .remove-btn { opacity: 1; }
+.img-card .remove-btn:hover { color: var(--danger); border-color: var(--danger); }
+
+.img-card .spinner-overlay {
+  position: absolute; inset: 0;
+  background: rgba(13,13,13,0.7);
+  display: flex; align-items: center; justify-content: center;
+}
+.spin {
+  width: 20px; height: 20px;
+  border: 2px solid var(--border2);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.7s linear infinite;
+}
+@keyframes spin { to { transform: rotate(360deg); } }
+
+.empty-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 2rem;
+  color: var(--muted);
+  font-size: 12px;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+}
+
+/* ── Action Bar ─────────────────────────────────────────────── */
+.action-bar {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+
+.btn {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 12px;
+  letter-spacing: 0.06em;
+  padding: 10px 20px;
+  border-radius: 3px;
+  border: 1px solid;
+  cursor: pointer;
+  transition: all 0.15s;
+  text-transform: uppercase;
+}
+.btn-primary {
+  background: var(--accent);
+  color: #0d0d0d;
+  border-color: var(--accent);
+  font-weight: 500;
+}
+.btn-primary:hover { background: #d8ff7a; border-color: #d8ff7a; }
+.btn-primary:disabled {
+  background: var(--border2);
+  border-color: var(--border2);
+  color: var(--muted);
+  cursor: not-allowed;
+}
+.btn-ghost {
+  background: transparent;
+  color: var(--muted);
+  border-color: var(--border);
+}
+.btn-ghost:hover { color: var(--text); border-color: var(--border2); }
+
+.img-count {
+  font-size: 11px;
+  color: var(--muted);
+  margin-left: auto;
+}
+
+/* ── Right Panel ─────────────────────────────────────────────── */
+.right-panel {
+  padding: 2.5rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.5rem;
+}
+
+/* ── Result Card ─────────────────────────────────────────────── */
+.result-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  overflow: hidden;
+  animation: fadeUp 0.3s ease both;
+}
+.result-card.highlighted { border-color: var(--accent); }
+
+.result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 14px;
+  border-bottom: 1px solid var(--border);
+  cursor: pointer;
+}
+.result-thumb {
+  width: 40px; height: 40px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+.result-info { flex: 1; min-width: 0; }
+.result-fname {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  margin-bottom: 3px;
+}
+.result-label-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.result-class {
+  font-family: 'Syne', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--text);
+  text-transform: capitalize;
+}
+.result-conf {
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.result-body { padding: 12px 14px; }
+
+.score-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.score-row:last-child { margin-bottom: 0; }
+.score-cls {
+  font-size: 11px;
+  width: 64px;
+  color: var(--muted);
+  text-transform: capitalize;
+  flex-shrink: 0;
+}
+.score-track {
+  flex: 1;
+  height: 3px;
+  background: var(--border);
+  border-radius: 2px;
+  overflow: hidden;
+}
+.score-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.5s cubic-bezier(0.16,1,0.3,1);
+}
+.score-pct {
+  font-size: 11px;
+  width: 38px;
+  text-align: right;
+  flex-shrink: 0;
+}
+
+/* ── Summary / Placeholder ───────────────────────────────────── */
+.panel-placeholder {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  text-align: center;
+  padding: 2rem;
+  border: 1px dashed var(--border);
+  border-radius: 4px;
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.8;
+}
+.panel-placeholder .big { font-size: 2rem; margin-bottom: 0.8rem; opacity: 0.3; }
+
+.summary-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 14px 16px;
+  font-size: 12px;
+  color: var(--muted);
+  line-height: 2;
+  display: none;
+}
+.summary-box strong { color: var(--text); }
+.summary-box .accent { color: var(--accent); }
+
+/* ── Color map ───────────────────────────────────────────────── */
+.c-cat      { background: var(--cat);      color: #0d1a16; }
+.c-dog      { background: var(--dog);      color: #1a160d; }
+.c-car      { background: var(--car);      color: #0d1120; }
+.c-airplane { background: var(--airplane); color: #200d1a; }
+.f-cat      { background: var(--cat); }
+.f-dog      { background: var(--dog); }
+.f-car      { background: var(--car); }
+.f-airplane { background: var(--airplane); }
+.t-cat      { color: var(--cat); }
+.t-dog      { color: var(--dog); }
+.t-car      { color: var(--car); }
+.t-airplane { color: var(--airplane); }
+
+/* ── Paste Zone ──────────────────────────────────────────────── */
+#paste-zone {
+  border: 1.5px dashed var(--border2);
+  border-radius: 4px;
+  padding: 1rem 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  cursor: pointer;
+  transition: border-color 0.2s, background 0.15s;
+  margin-bottom: 1.5rem;
+  position: relative;
+  outline: none;
+}
+#paste-zone:hover,
+#paste-zone:focus,
+#paste-zone.flash {
+  border-color: var(--accent);
+  background: rgba(200,245,90,0.03);
+}
+#paste-zone.flash { animation: pasteFlash 0.35s ease; }
+@keyframes pasteFlash {
+  0%   { background: rgba(200,245,90,0.12); }
+  100% { background: rgba(200,245,90,0.03); }
+}
+.paste-icon {
+  width: 32px; height: 32px; flex-shrink: 0;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  display: flex; align-items: center; justify-content: center;
+}
+.paste-icon svg { width: 15px; height: 15px; stroke: var(--accent); fill: none; stroke-width: 1.8; }
+.paste-text { flex: 1; }
+.paste-title { font-size: 13px; color: var(--text); margin-bottom: 2px; }
+.paste-sub   { font-size: 11px; color: var(--muted); }
+.paste-kbd {
+  font-family: 'IBM Plex Mono', monospace;
+  font-size: 10px;
+  padding: 2px 7px;
+  border: 1px solid var(--border2);
+  border-radius: 3px;
+  color: var(--accent);
+  background: var(--surface2);
+  flex-shrink: 0;
+}
+
+/* ── Responsive ──────────────────────────────────────────────── */
+@media (max-width: 860px) {
+  main { grid-template-columns: 1fr; }
+  header { padding: 1.5rem; }
+  .left-panel { padding: 1.5rem; border-right: none; border-bottom: 1px solid var(--border); }
+  .right-panel { padding: 1.5rem; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <div class="logo">Efficient<span>Net</span></div>
+    <div class="logo-sub">Image Classification — B3</div>
+  </div>
+  <div class="header-meta">
+    <div><span class="pill">EfficientNet-B3</span> &nbsp;<span class="pill">ONNX</span></div>
+    <div style="margin-top:6px;">1000 classes · 81% accuracy · top-5</div>
+  </div>
+</header>
+
+<main>
+  <!-- ── Left: Upload & Grid ── -->
+  <div class="left-panel">
+
+    <div id="drop-zone" onclick="document.getElementById('file-input').click()">
+      <input type="file" id="file-input" accept="image/*" multiple>
+      <div class="dz-icon">
+        <svg viewBox="0 0 24 24"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+      </div>
+      <div class="dz-title">Drop images here</div>
+      <div class="dz-sub">or click to browse &nbsp;·&nbsp; <em>JPG, PNG, WebP, GIF</em><br>Multiple files supported</div>
+    </div>
+
+    <div id="paste-zone" tabindex="0" title="Click here then press Ctrl+V / Cmd+V">
+      <div class="paste-icon">
+        <svg viewBox="0 0 24 24"><rect x="9" y="2" width="6" height="4" rx="1"/><path d="M9 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V4a2 2 0 0 0-2-2h-3"/><path d="M9 12h6M9 16h4"/></svg>
+      </div>
+      <div class="paste-text">
+        <div class="paste-title">Paste an image</div>
+        <div class="paste-sub">Click here, then press Ctrl+V &nbsp;·&nbsp; or paste anywhere on the page</div>
+      </div>
+      <span class="paste-kbd">Ctrl+V</span>
+    </div>
+
+    <div class="section-label">Queue</div>
+
+    <div id="image-grid">
+      <div class="empty-state">No images added yet</div>
+    </div>
+
+    <div class="action-bar">
+      <button class="btn btn-primary" id="classify-btn" disabled onclick="classifyAll()">
+        ▶ &nbsp;Classify All
+      </button>
+      <button class="btn btn-ghost" id="clear-btn" onclick="clearAll()">Clear</button>
+      <span class="img-count" id="img-count"></span>
+    </div>
+
+  </div>
+
+  <!-- ── Right: Results ── -->
+  <div class="right-panel" id="right-panel">
+    <div class="section-label">Results</div>
+
+    <div class="panel-placeholder" id="placeholder">
+      <div class="big">◈</div>
+      Add images and click<br><strong style="color:var(--text)">Classify All</strong><br>to see predictions
+    </div>
+
+    <div class="summary-box" id="summary-box"></div>
+
+    <div id="results-list"></div>
+  </div>
+</main>
+
+<script>
+const fileInput     = document.getElementById('file-input');
+const dropZone      = document.getElementById('drop-zone');
+const imageGrid     = document.getElementById('image-grid');
+const classifyBtn   = document.getElementById('classify-btn');
+const clearBtn      = document.getElementById('clear-btn');
+const imgCount      = document.getElementById('img-count');
+const placeholder   = document.getElementById('placeholder');
+const resultsList   = document.getElementById('results-list');
+const summaryBox    = document.getElementById('summary-box');
+
+// accent colours cycling for arbitrary labels
+const ACCENT_PALETTE = ['#5af5c8','#f5c85a','#5a8ff5','#f55ac8','#f55a5a','#c8f55a','#5af5f5','#f5905a'];
+const labelColor = (() => {
+  const map = {};
+  let idx = 0;
+  return label => { if (!map[label]) map[label] = ACCENT_PALETTE[idx++ % ACCENT_PALETTE.length]; return map[label]; };
+})();
+
+let images = [];   // { id, file, dataUrl, result }
+let nextId = 0;
+
+// ── File input ──────────────────────────────────────────────────
+fileInput.addEventListener('change', e => addFiles([...e.target.files]));
+
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('drag-over'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag-over'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault();
+  dropZone.classList.remove('drag-over');
+  addFiles([...e.dataTransfer.files].filter(f => f.type.startsWith('image/')));
+});
+
+// ── Paste support ───────────────────────────────────────────────
+function handlePasteEvent(e) {
+  const items = (e.clipboardData || e.originalEvent?.clipboardData)?.items;
+  if (!items) return;
+  const imageItems = [...items].filter(i => i.type.startsWith('image/'));
+  if (imageItems.length === 0) return;
+  e.preventDefault();
+  const pasteZone = document.getElementById('paste-zone');
+  pasteZone.classList.add('flash');
+  setTimeout(() => pasteZone.classList.remove('flash'), 400);
+  imageItems.forEach(item => {
+    const file = item.getAsFile();
+    if (file) addDataUrlFromBlob(file, `pasted-image-${nextId}.png`);
+  });
+}
+
+function addDataUrlFromBlob(blob, name) {
+  const id = nextId++;
+  const reader = new FileReader();
+  reader.onload = e => {
+    images.push({ id, file: { name }, dataUrl: e.target.result, result: null });
+    renderGrid();
+  };
+  reader.readAsDataURL(blob);
+}
+
+// Global paste listener (works anywhere on the page)
+document.addEventListener('paste', handlePasteEvent);
+
+// Also handle paste when paste-zone is focused
+document.getElementById('paste-zone').addEventListener('paste', handlePasteEvent);
+
+function addFiles(files) {
+  files.forEach(file => {
+    const id = nextId++;
+    const reader = new FileReader();
+    reader.onload = e => {
+      images.push({ id, file, dataUrl: e.target.result, result: null });
+      renderGrid();
+    };
+    reader.readAsDataURL(file);
+  });
+  fileInput.value = '';
+}
+
+// ── Render grid ──────────────────────────────────────────────────
+function renderGrid() {
+  classifyBtn.disabled = images.length === 0;
+  imgCount.textContent = images.length ? `${images.length} image${images.length > 1 ? 's' : ''}` : '';
+
+  if (images.length === 0) {
+    imageGrid.innerHTML = '<div class="empty-state">No images added yet</div>';
+    return;
+  }
+
+  imageGrid.innerHTML = '';
+  images.forEach(img => {
+    const card = document.createElement('div');
+    card.className = 'img-card' + (img.result ? ' active' : '');
+    card.dataset.id = img.id;
+    card.onclick = () => scrollToResult(img.id);
+
+    const badgeHtml = img.result
+      ? `<div class="badge" style="background:${labelColor(img.result.label)};color:#0d0d0d">${img.result.label}</div>`
+      : '';
+    const spinnerHtml = img.loading
+      ? `<div class="spinner-overlay"><div class="spin"></div></div>`
+      : '';
+
+    card.innerHTML = `
+      <img src="${img.dataUrl}" alt="${img.file.name}">
+      ${badgeHtml}
+      ${spinnerHtml}
+      <div class="remove-btn" onclick="removeImage(event, ${img.id})">✕</div>
+    `;
+    imageGrid.appendChild(card);
+  });
+}
+
+function removeImage(e, id) {
+  e.stopPropagation();
+  images = images.filter(i => i.id !== id);
+  renderGrid();
+  renderResults();
+}
+
+function clearAll() {
+  images = [];
+  renderGrid();
+  renderResults();
+}
+
+// ── Classify ─────────────────────────────────────────────────────
+async function classifyAll() {
+  if (images.length === 0) return;
+  classifyBtn.disabled = true;
+  placeholder.style.display = 'none';
+  resultsList.innerHTML = '';
+  summaryBox.style.display = 'none';
+
+  // classify each image sequentially
+  for (const img of images) {
+    img.loading = true;
+    img.result = null;
+    renderGrid();
+
+    try {
+      const res = await fetch('/classify', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ image: img.dataUrl }),
+      });
+      const data = await res.json();
+      if (data.error) throw new Error(data.error);
+      img.result = data;
+    } catch (err) {
+      img.result = { label: 'error', confidence: 0, results: [], error: err.message };
+    }
+
+    img.loading = false;
+    renderGrid();
+    appendResult(img);
+  }
+
+  classifyBtn.disabled = false;
+  renderSummary();
+}
+
+// ── Render a single result card ───────────────────────────────────
+function appendResult(img) {
+  if (!img.result) return;
+  const r = img.result;
+
+  const card = document.createElement('div');
+  card.className = 'result-card';
+  card.id = `result-${img.id}`;
+
+  if (r.error) {
+    card.innerHTML = `
+      <div class="result-header">
+        <img class="result-thumb" src="${img.dataUrl}">
+        <div class="result-info">
+          <div class="result-fname">${img.file.name}</div>
+          <div class="result-label-row">
+            <span class="result-class" style="color:var(--danger)">Error</span>
+          </div>
+        </div>
+      </div>
+      <div class="result-body" style="font-size:11px;color:var(--danger)">${r.error}</div>`;
+  } else {
+    const topPct  = r.results[0].confidence;
+    const color   = labelColor(r.label);
+    const scoresHtml = r.results.map(item => {
+      const isTop = item.label === r.label;
+      const fill  = labelColor(item.label);
+      const groupTag = item.group ? `<span style="font-size:9px;padding:1px 5px;border-radius:2px;background:${fill}22;color:${fill};margin-left:5px;">${item.group}</span>` : '';
+      return `
+        <div class="score-row">
+          <div class="score-cls" title="${item.label}" style="width:auto;max-width:160px;flex:1;">${item.label.length > 22 ? item.label.slice(0,21)+'…' : item.label}${groupTag}</div>
+          <div class="score-track" style="max-width:80px;">
+            <div class="score-fill" style="width:0%;background:${fill}" data-w="${(item.confidence/Math.max(topPct,1)*100).toFixed(1)}%"></div>
+          </div>
+          <div class="score-pct" style="color:${isTop ? fill : 'var(--muted)'}">
+            ${item.confidence.toFixed(1)}%
+          </div>
+        </div>`;
+    }).join('');
+
+    const groupBadge = r.group
+      ? `<span style="font-size:10px;padding:1px 7px;border-radius:2px;background:${color}22;color:${color};border:1px solid ${color}44;">${r.group}</span>`
+      : '';
+
+    card.innerHTML = `
+      <div class="result-header" onclick="highlightCard(${img.id})">
+        <img class="result-thumb" src="${img.dataUrl}">
+        <div class="result-info">
+          <div class="result-fname">${img.file.name}</div>
+          <div class="result-label-row">
+            <span class="result-class" style="color:${color}">${r.label}</span>
+            <span class="result-conf">${r.confidence.toFixed(1)}%</span>
+            ${groupBadge}
+          </div>
+        </div>
+      </div>
+      <div class="result-body">${scoresHtml}</div>`;
+  }
+
+  resultsList.appendChild(card);
+
+  // animate bars after paint
+  requestAnimationFrame(() => {
+    card.querySelectorAll('.score-fill').forEach(b => b.style.width = b.dataset.w);
+  });
+}
+
+function renderResults() {
+  placeholder.style.display = images.length === 0 || !images.some(i => i.result) ? 'flex' : 'none';
+  resultsList.innerHTML = '';
+  summaryBox.style.display = 'none';
+  images.filter(i => i.result).forEach(appendResult);
+  if (images.some(i => i.result)) renderSummary();
+}
+
+function renderSummary() {
+  const classified = images.filter(i => i.result && !i.result.error);
+  if (classified.length === 0) return;
+
+  const counts = {};
+  classified.forEach(i => {
+    const key = i.result.group || i.result.label;
+    counts[key] = (counts[key] || 0) + 1;
+  });
+  const top = Object.entries(counts).sort((a, b) => b[1] - a[1])[0];
+  const avgConf = Math.round(classified.reduce((s, i) => s + i.result.confidence, 0) / classified.length);
+
+  summaryBox.innerHTML = `
+    <strong>${classified.length}</strong> images classified &nbsp;·&nbsp;
+    avg confidence <span class="accent">${avgConf}%</span><br>
+    most common: <strong class="t-${top[0]}">${top[0]}</strong> (${top[1]} image${top[1] > 1 ? 's' : ''})`;
+  summaryBox.style.display = 'block';
+}
+
+function scrollToResult(id) {
+  const el = document.getElementById(`result-${id}`);
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function highlightCard(id) {
+  document.querySelectorAll('.result-card').forEach(c => c.classList.remove('highlighted'));
+  const el = document.getElementById(`result-${id}`);
+  if (el) {
+    el.classList.add('highlighted');
+    const gridCard = document.querySelector(`.img-card[data-id="${id}"]`);
+    if (gridCard) gridCard.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  }
+}
+</script>
+</body>
+</html>
